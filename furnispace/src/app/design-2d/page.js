@@ -7,8 +7,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 export default function Design2DPage() {
-  const [roomWidth, setRoomWidth] = useState(16.4); // Feet (was 5m)
-  const [roomLength, setRoomLength] = useState(23.0); // Feet (was 7m)
+  const [roomWidth, setRoomWidth] = useState(10); // Feet
+  const [roomLength, setRoomLength] = useState(12); // Feet
   const [floorColor, setFloorColor] = useState('#d1d5db'); // Default: Neutral
   const [furniture, setFurniture] = useState([]);
   const [selectedFurnitureId, setSelectedFurnitureId] = useState(null);
@@ -23,8 +23,8 @@ export default function Design2DPage() {
   const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 }); // Track last mouse position for panning
   const canvasRef = useRef(null);
   const router = useRouter();
-  const scale = 15; // 1ft = 9.144px (previously 1m = 30px, 1m = 3.28084ft, so 1ft = 30/3.28084)
-  const stepSize = 0.4; // Feet (was 0.5m = 1.64ft, rounded to 1.5ft)
+  const scale = 15; // 1ft = 15px
+  const stepSize = 0.4; // Feet
   const wallThickness = 4; // Pixels
   const canvasWidth = 800;
   const canvasHeight = 400;
@@ -33,18 +33,30 @@ export default function Design2DPage() {
 
   // Initialize default room, centered on the canvas
   useEffect(() => {
-    const widthPx = roomWidth * scale; // e.g., 16.4ft * 9.144 = ~150px
-    const heightPx = roomLength * scale; // e.g., 23.0ft * 9.144 = ~210px
-    const xOffset = (canvasWidth - widthPx) / 2; // (800 - 150) / 2 = 325px
-    const yOffset = (canvasHeight - heightPx) / 2; // (400 - 210) / 2 = 95px
+    const widthPx = roomWidth * scale;
+    const heightPx = roomLength * scale;
+    const xOffset = (canvasWidth - widthPx) / 2;
+    const yOffset = (canvasHeight - heightPx) / 2;
     const defaultWalls = [
-      { id: 1, start: { x: xOffset, y: yOffset }, end: { x: xOffset + widthPx, y: yOffset }, length: widthPx },
-      { id: 2, start: { x: xOffset + widthPx, y: yOffset }, end: { x: xOffset + widthPx, y: yOffset + heightPx }, length: heightPx },
-      { id: 3, start: { x: xOffset + widthPx, y: yOffset + heightPx }, end: { x: xOffset, y: yOffset + heightPx }, length: widthPx },
-      { id: 4, start: { x: xOffset, y: yOffset + heightPx }, end: { x: xOffset, y: yOffset }, length: heightPx },
+      { id: 1, start: { x: xOffset, y: yOffset }, end: { x: xOffset + widthPx, y: yOffset }, length: widthPx, color: '#808080' },
+      { id: 2, start: { x: xOffset + widthPx, y: yOffset }, end: { x: xOffset + widthPx, y: yOffset + heightPx }, length: heightPx, color: '#808080' },
+      { id: 3, start: { x: xOffset + widthPx, y: yOffset + heightPx }, end: { x: xOffset, y: yOffset + heightPx }, length: widthPx, color: '#808080' },
+      { id: 4, start: { x: xOffset, y: yOffset + heightPx }, end: { x: xOffset, y: yOffset }, length: heightPx, color: '#808080' },
     ];
     setWalls(defaultWalls);
   }, [roomWidth, roomLength]);
+
+  // Save to localStorage whenever state changes
+  useEffect(() => {
+    const designData = {
+      roomWidth,
+      roomLength,
+      floorColor,
+      walls,
+      furniture,
+    };
+    localStorage.setItem('design-2d-data', JSON.stringify(designData));
+  }, [roomWidth, roomLength, floorColor, walls, furniture]);
 
   // Calculate bounding box of walls for furniture constraints
   const getWallBounds = () => {
@@ -81,7 +93,6 @@ export default function Design2DPage() {
       walls.forEach((wall) => {
         ctx.lineTo(wall.end.x, wall.end.y);
       });
-      // Close the path by connecting the last point to the first
       ctx.lineTo(walls[0].start.x, walls[0].start.y);
       ctx.closePath();
       ctx.fill();
@@ -92,17 +103,17 @@ export default function Design2DPage() {
       ctx.beginPath();
       ctx.moveTo(wall.start.x, wall.start.y);
       ctx.lineTo(wall.end.x, wall.end.y);
-      ctx.lineWidth = wallThickness / zoomLevel; // Adjust thickness based on zoom
-      ctx.fillStyle = '#808080'; // Gray fill
-      ctx.strokeStyle = wall.id === selectedWallId ? 'red' : '#4B4B4B'; // Dark gray stroke
+      ctx.lineWidth = wallThickness / zoomLevel;
+      ctx.fillStyle = wall.color || '#808080';
+      ctx.strokeStyle = wall.id === selectedWallId ? 'red' : '#4B4B4B';
       ctx.stroke();
       ctx.fill();
 
       // Draw wall length label
       const midX = (wall.start.x + wall.end.x) / 2;
       const midY = (wall.start.y + wall.end.y) / 2;
-      const lengthFeet = (wall.length / scale).toFixed(1); // Length in feet
-      ctx.font = `${12 / zoomLevel}px Arial`; // Adjust font size based on zoom
+      const lengthFeet = (wall.length / scale).toFixed(1);
+      ctx.font = `${12 / zoomLevel}px Arial`;
       ctx.fillStyle = 'black';
       ctx.textAlign = 'center';
       ctx.fillText(`${lengthFeet}'`, midX, midY - 10 / zoomLevel);
@@ -110,23 +121,21 @@ export default function Design2DPage() {
 
     // Draw temporary wall shadow with snapping
     if (mode === 'add-walls' && tempWallStart) {
-      let endX = (mousePos.x / zoomLevel) - panOffset.x; // Adjust for zoom and pan
+      let endX = (mousePos.x / zoomLevel) - panOffset.x;
       let endY = (mousePos.y / zoomLevel) - panOffset.y;
 
-      // Calculate initial direction
       const dx = endX - tempWallStart.x;
       const dy = endY - tempWallStart.y;
-      const angle = Math.atan2(dy, dx) * (180 / Math.PI); // Convert to degrees
+      const angle = Math.atan2(dy, dx) * (180 / Math.PI);
       const length = Math.sqrt(dx * dx + dy * dy);
       let snappedAngle = angle;
 
-      // Snap to 0, 90, 180, 270 degrees within a 15-degree threshold
       if (Math.abs(angle) < 15 || Math.abs(angle) > 165) {
-        snappedAngle = dx >= 0 ? 0 : 180; // Horizontal: right (0°) or left (180°)
+        snappedAngle = dx >= 0 ? 0 : 180;
       } else if (Math.abs(angle - 90) < 15) {
-        snappedAngle = 90; // Vertical: down (90°)
+        snappedAngle = 90;
       } else if (Math.abs(angle + 90) < 15) {
-        snappedAngle = -90; // Vertical: up (-90°)
+        snappedAngle = -90;
       }
 
       if (snappedAngle !== angle) {
@@ -139,7 +148,7 @@ export default function Design2DPage() {
       ctx.moveTo(tempWallStart.x, tempWallStart.y);
       ctx.lineTo(endX, endY);
       ctx.lineWidth = wallThickness / zoomLevel;
-      ctx.strokeStyle = '#87CEEB'; // Light blue
+      ctx.strokeStyle = '#87CEEB';
       ctx.stroke();
       const tempLength = Math.sqrt(
         Math.pow(endX - tempWallStart.x, 2) + Math.pow(endY - tempWallStart.y, 2)
@@ -150,8 +159,24 @@ export default function Design2DPage() {
       ctx.fillText(`${tempLengthFeet}'`, tempMidX, tempMidY - 10 / zoomLevel);
     }
 
+    // Draw furniture
+    furniture.forEach((item) => {
+      ctx.save();
+      ctx.translate((item.x + panOffset.x) * zoomLevel, (item.y + panOffset.y) * zoomLevel);
+      ctx.fillStyle = item.color || '#8b4513';
+      ctx.fillRect(0, 0, item.width * scale * zoomLevel, item.length * scale * zoomLevel);
+      ctx.strokeStyle = item.id === selectedFurnitureId ? 'red' : 'black';
+      ctx.lineWidth = 1 / zoomLevel;
+      ctx.strokeRect(0, 0, item.width * scale * zoomLevel, item.length * scale * zoomLevel);
+      ctx.fillStyle = '#000';
+      ctx.font = `${12 / zoomLevel}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.fillText(item.type, (item.width * scale * zoomLevel) / 2, (item.length * scale * zoomLevel) / 2);
+      ctx.restore();
+    });
+
     ctx.restore();
-  }, [walls, floorColor, selectedWallId, tempWallStart, mousePos, zoomLevel, panOffset]);
+  }, [walls, floorColor, selectedWallId, tempWallStart, mousePos, zoomLevel, panOffset, furniture]);
 
   // Update mouse position
   const handleMouseMove = (e) => {
@@ -160,7 +185,6 @@ export default function Design2DPage() {
     const y = e.clientY - rect.top;
     setMousePos({ x, y });
 
-    // Handle panning
     if (isPanning) {
       const dx = (x - lastMousePos.x) / zoomLevel;
       const dy = (y - lastMousePos.y) / zoomLevel;
@@ -216,7 +240,6 @@ export default function Design2DPage() {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // Start panning if not in specific modes
     if (mode === 'furniture' && !selectedFurnitureId && !walls.some(wall => 
       x >= Math.min(wall.start.x, wall.end.x) * zoomLevel + panOffset.x * zoomLevel &&
       x <= (Math.max(wall.start.x, wall.end.x) * zoomLevel + panOffset.x * zoomLevel) &&
@@ -236,14 +259,13 @@ export default function Design2DPage() {
   // Handle adding walls
   const handleCanvasClick = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
-    let x = (e.clientX - rect.left) / zoomLevel - panOffset.x; // Adjust for zoom and pan
+    let x = (e.clientX - rect.left) / zoomLevel - panOffset.x;
     let y = (e.clientY - rect.top) / zoomLevel - panOffset.y;
 
     if (mode === 'add-walls') {
       if (!tempWallStart) {
         setTempWallStart({ x, y });
       } else {
-        // Snap to 90 degrees for the final wall
         const dx = x - tempWallStart.x;
         const dy = y - tempWallStart.y;
         const angle = Math.atan2(dy, dx) * (180 / Math.PI);
@@ -251,11 +273,11 @@ export default function Design2DPage() {
         let snappedAngle = angle;
 
         if (Math.abs(angle) < 15 || Math.abs(angle) > 165) {
-          snappedAngle = dx >= 0 ? 0 : 180; // Horizontal: right (0°) or left (180°)
+          snappedAngle = dx >= 0 ? 0 : 180;
         } else if (Math.abs(angle - 90) < 15) {
-          snappedAngle = 90; // Vertical: down (90°)
+          snappedAngle = 90;
         } else if (Math.abs(angle + 90) < 15) {
-          snappedAngle = -90; // Vertical: up (-90°)
+          snappedAngle = -90;
         }
 
         if (snappedAngle !== angle) {
@@ -271,6 +293,7 @@ export default function Design2DPage() {
           length: Math.sqrt(
             Math.pow(x - tempWallStart.x, 2) + Math.pow(y - tempWallStart.y, 2)
           ),
+          color: '#808080',
         };
         setWalls([...walls, newWall]);
         setTempWallStart(null);
@@ -327,16 +350,16 @@ export default function Design2DPage() {
 
   const handleAddFurniture = (type) => {
     const dimensions = {
-      Chair: { width: 3.3, length: 3.3 }, // 1m = 3.3ft
-      Table: { width: 6.6, length: 4.9 }, // 2m x 1.5m = 6.6ft x 4.9ft
-      Sofa: { width: 6.6, length: 3.3 }, // 2m x 1m = 6.6ft x 3.3ft
-      Bed: { width: 6.6, length: 4.9 }, // 2m x 1.5m = 6.6ft x 4.9ft
-      Lamp: { width: 1.6, length: 1.6 }, // 0.5m = 1.6ft
+      Chair: { width: 3.3, length: 3.3 },
+      Table: { width: 6.6, length: 4.9 },
+      Sofa: { width: 6.6, length: 3.3 },
+      Bed: { width: 6.6, length: 4.9 },
+      Lamp: { width: 1.6, length: 1.6 },
     };
     const { width, length } = dimensions[type];
     const newFurniture = {
       type,
-      x: canvasWidth / 2 / zoomLevel - panOffset.x - width * scale / 2, // Center of canvas, adjusted for zoom and pan
+      x: canvasWidth / 2 / zoomLevel - panOffset.x - width * scale / 2,
       y: canvasHeight / 2 / zoomLevel - panOffset.y - length * scale / 2,
       width,
       length,
@@ -381,11 +404,11 @@ export default function Design2DPage() {
 
   // Zoom handlers
   const handleZoomIn = () => {
-    setZoomLevel((prev) => Math.min(prev + 0.1, 2)); // Max zoom 2x
+    setZoomLevel((prev) => Math.min(prev + 0.1, 2));
   };
 
   const handleZoomOut = () => {
-    setZoomLevel((prev) => Math.max(prev - 0.1, 0.5)); // Min zoom 0.5x
+    setZoomLevel((prev) => Math.max(prev - 0.1, 0.5));
   };
 
   return (
@@ -393,7 +416,7 @@ export default function Design2DPage() {
       <header className="bg-white shadow">
         <div className="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8 flex justify-between items-center">
           <h1 className="text-2xl font-bold text-gray-900">Furniture Design Studio (2D)</h1>
-          <Button onClick={() => router.push('/design')} variant="outline">
+          <Button onClick={() => router.push('/design-3d')} variant="outline">
             Switch to 3D
           </Button>
         </div>
@@ -411,7 +434,7 @@ export default function Design2DPage() {
                   type="number"
                   id="roomWidth"
                   value={roomWidth}
-                  onChange={(e) => setRoomWidth(e.target.value)}
+                  onChange={(e) => setRoomWidth(parseFloat(e.target.value) || 10)}
                   placeholder="e.g., 16.4"
                   min="1"
                 />
@@ -424,7 +447,7 @@ export default function Design2DPage() {
                   type="number"
                   id="roomLength"
                   value={roomLength}
-                  onChange={(e) => setRoomLength(e.target.value)}
+                  onChange={(e) => setRoomLength(parseFloat(e.target.value) || 12)}
                   placeholder="e.g., 23.0"
                   min="1"
                 />
@@ -636,7 +659,6 @@ export default function Design2DPage() {
                   {item.type}
                   {item.id === selectedFurnitureId && mode === 'furniture' && (
                     <div>
-                      {/* Up Arrow */}
                       <button
                         className="absolute bg-gray-200 hover:bg-gray-300 rounded-full w-6 h-6 flex items-center justify-center"
                         style={{ left: '50%', top: -30, transform: 'translateX(-50%)' }}
@@ -649,7 +671,6 @@ export default function Design2DPage() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
                         </svg>
                       </button>
-                      {/* Down Arrow */}
                       <button
                         className="absolute bg-gray-200 hover:bg-gray-300 rounded-full w-6 h-6 flex items-center justify-center"
                         style={{ left: '50%', bottom: -30, transform: 'translateX(-50%)' }}
@@ -662,7 +683,6 @@ export default function Design2DPage() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
                         </svg>
                       </button>
-                      {/* Left Arrow */}
                       <button
                         className="absolute bg-gray-200 hover:bg-gray-300 rounded-full w-6 h-6 flex items-center justify-center"
                         style={{ top: '50%', left: -30, transform: 'translateY(-50%)' }}
@@ -675,7 +695,6 @@ export default function Design2DPage() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
                         </svg>
                       </button>
-                      {/* Right Arrow */}
                       <button
                         className="absolute bg-gray-200 hover:bg-gray-300 rounded-full w-6 h-6 flex items-center justify-center"
                         style={{ top: '50%', right: -30, transform: 'translateY(-50%)' }}
