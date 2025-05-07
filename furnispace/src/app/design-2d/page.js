@@ -4,11 +4,12 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 export default function Design2DPage() {
-  const [roomWidth, setRoomWidth] = useState(5); // Meters
-  const [roomLength, setRoomLength] = useState(7); // Meters
-  const [colorScheme, setColorScheme] = useState('Neutral');
+  const [roomWidth, setRoomWidth] = useState(16.4); // Feet (was 5m)
+  const [roomLength, setRoomLength] = useState(23.0); // Feet (was 7m)
+  const [floorColor, setFloorColor] = useState('#d1d5db'); // Default: Neutral
   const [furniture, setFurniture] = useState([]);
   const [selectedFurnitureId, setSelectedFurnitureId] = useState(null);
   const [walls, setWalls] = useState([]);
@@ -16,95 +17,162 @@ export default function Design2DPage() {
   const [tempWallStart, setTempWallStart] = useState(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [selectedWallId, setSelectedWallId] = useState(null);
+  const [zoomLevel, setZoomLevel] = useState(1); // Zoom level for canvas
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 }); // Pan offset for dragging
+  const [isPanning, setIsPanning] = useState(false); // Track if panning is active
+  const [lastMousePos, setLastMousePos] = useState({ x: 0, y: 0 }); // Track last mouse position for panning
   const canvasRef = useRef(null);
   const router = useRouter();
-  const scale = 30; // 1m = 30px
-  const stepSize = 0.5; // Meters (15px at scale=30)
-  const wallThickness = 10; // Pixels
-  const metersToFeet = 3.28084; // 1m = 3.28084ft
+  const scale = 15; // 1ft = 9.144px (previously 1m = 30px, 1m = 3.28084ft, so 1ft = 30/3.28084)
+  const stepSize = 0.4; // Feet (was 0.5m = 1.64ft, rounded to 1.5ft)
+  const wallThickness = 4; // Pixels
+  const canvasWidth = 800;
+  const canvasHeight = 400;
 
   const selectedFurniture = furniture.find((item) => item.id === selectedFurnitureId);
 
-  // Convert dimensions to feet for display
-  const roomWidthFeet = (roomWidth * metersToFeet).toFixed(1);
-  const roomLengthFeet = (roomLength * metersToFeet).toFixed(1);
-
-  // Initialize default room (5m x 7m in pixels)
+  // Initialize default room, centered on the canvas
   useEffect(() => {
-    const widthPx = roomWidth * scale;
-    const heightPx = roomLength * scale;
+    const widthPx = roomWidth * scale; // e.g., 16.4ft * 9.144 = ~150px
+    const heightPx = roomLength * scale; // e.g., 23.0ft * 9.144 = ~210px
+    const xOffset = (canvasWidth - widthPx) / 2; // (800 - 150) / 2 = 325px
+    const yOffset = (canvasHeight - heightPx) / 2; // (400 - 210) / 2 = 95px
     const defaultWalls = [
-      { id: 1, start: { x: 0, y: 0 }, end: { x: widthPx, y: 0 }, length: widthPx },
-      { id: 2, start: { x: widthPx, y: 0 }, end: { x: widthPx, y: heightPx }, length: heightPx },
-      { id: 3, start: { x: widthPx, y: heightPx }, end: { x: 0, y: heightPx }, length: widthPx },
-      { id: 4, start: { x: 0, y: heightPx }, end: { x: 0, y: 0 }, length: heightPx },
+      { id: 1, start: { x: xOffset, y: yOffset }, end: { x: xOffset + widthPx, y: yOffset }, length: widthPx },
+      { id: 2, start: { x: xOffset + widthPx, y: yOffset }, end: { x: xOffset + widthPx, y: yOffset + heightPx }, length: heightPx },
+      { id: 3, start: { x: xOffset + widthPx, y: yOffset + heightPx }, end: { x: xOffset, y: yOffset + heightPx }, length: widthPx },
+      { id: 4, start: { x: xOffset, y: yOffset + heightPx }, end: { x: xOffset, y: yOffset }, length: heightPx },
     ];
     setWalls(defaultWalls);
   }, [roomWidth, roomLength]);
+
+  // Calculate bounding box of walls for furniture constraints
+  const getWallBounds = () => {
+    if (walls.length === 0) return { minX: 0, maxX: canvasWidth, minY: 0, maxY: canvasHeight };
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    walls.forEach((wall) => {
+      minX = Math.min(minX, wall.start.x, wall.end.x);
+      maxX = Math.max(maxX, wall.start.x, wall.end.x);
+      minY = Math.min(minY, wall.start.y, wall.end.y);
+      maxY = Math.max(maxY, wall.start.y, wall.end.y);
+    });
+    return { minX, maxX, minY, maxY };
+  };
 
   // Draw canvas: room background, walls, labels, and temporary wall
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
 
+    // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Draw room background
-    ctx.fillStyle = colorScheme === 'Neutral' ? '#d1d5db' : colorScheme === 'Warm' ? '#f97316' : '#3b82f6';
-    ctx.beginPath();
-    walls.forEach((wall, index) => {
-      if (index === 0) ctx.moveTo(wall.start.x, wall.start.y);
-      ctx.lineTo(wall.end.x, wall.end.y);
-    });
-    ctx.closePath();
-    ctx.fill();
+    // Apply zoom and pan transformations
+    ctx.save();
+    ctx.scale(zoomLevel, zoomLevel);
+    ctx.translate(panOffset.x, panOffset.y);
+
+    // Draw room background by tracing wall endpoints
+    if (walls.length > 0) {
+      ctx.fillStyle = floorColor;
+      ctx.beginPath();
+      let currentPoint = walls[0].start;
+      ctx.moveTo(currentPoint.x, currentPoint.y);
+      walls.forEach((wall) => {
+        ctx.lineTo(wall.end.x, wall.end.y);
+      });
+      // Close the path by connecting the last point to the first
+      ctx.lineTo(walls[0].start.x, walls[0].start.y);
+      ctx.closePath();
+      ctx.fill();
+    }
 
     // Draw walls
     walls.forEach((wall) => {
       ctx.beginPath();
       ctx.moveTo(wall.start.x, wall.start.y);
       ctx.lineTo(wall.end.x, wall.end.y);
-      ctx.lineWidth = wallThickness;
-      ctx.strokeStyle = wall.id === selectedWallId ? 'red' : 'black';
+      ctx.lineWidth = wallThickness / zoomLevel; // Adjust thickness based on zoom
+      ctx.fillStyle = '#808080'; // Gray fill
+      ctx.strokeStyle = wall.id === selectedWallId ? 'red' : '#4B4B4B'; // Dark gray stroke
       ctx.stroke();
+      ctx.fill();
 
       // Draw wall length label
       const midX = (wall.start.x + wall.end.x) / 2;
       const midY = (wall.start.y + wall.end.y) / 2;
-      const lengthFeet = (wall.length / scale * metersToFeet).toFixed(1);
-      ctx.font = '12px Arial';
+      const lengthFeet = (wall.length / scale).toFixed(1); // Length in feet
+      ctx.font = `${12 / zoomLevel}px Arial`; // Adjust font size based on zoom
       ctx.fillStyle = 'black';
       ctx.textAlign = 'center';
-      ctx.fillText(`${lengthFeet}'`, midX, midY - 10);
+      ctx.fillText(`${lengthFeet}'`, midX, midY - 10 / zoomLevel);
     });
 
-    // Draw temporary wall shadow
+    // Draw temporary wall shadow with snapping
     if (mode === 'add-walls' && tempWallStart) {
+      let endX = (mousePos.x / zoomLevel) - panOffset.x; // Adjust for zoom and pan
+      let endY = (mousePos.y / zoomLevel) - panOffset.y;
+
+      // Calculate initial direction
+      const dx = endX - tempWallStart.x;
+      const dy = endY - tempWallStart.y;
+      const angle = Math.atan2(dy, dx) * (180 / Math.PI); // Convert to degrees
+      const length = Math.sqrt(dx * dx + dy * dy);
+      let snappedAngle = angle;
+
+      // Snap to 0, 90, 180, 270 degrees within a 15-degree threshold
+      if (Math.abs(angle) < 15 || Math.abs(angle) > 165) {
+        snappedAngle = dx >= 0 ? 0 : 180; // Horizontal: right (0°) or left (180°)
+      } else if (Math.abs(angle - 90) < 15) {
+        snappedAngle = 90; // Vertical: down (90°)
+      } else if (Math.abs(angle + 90) < 15) {
+        snappedAngle = -90; // Vertical: up (-90°)
+      }
+
+      if (snappedAngle !== angle) {
+        const snappedAngleRad = snappedAngle * (Math.PI / 180);
+        endX = tempWallStart.x + length * Math.cos(snappedAngleRad);
+        endY = tempWallStart.y + length * Math.sin(snappedAngleRad);
+      }
+
       ctx.beginPath();
       ctx.moveTo(tempWallStart.x, tempWallStart.y);
-      ctx.lineTo(mousePos.x, mousePos.y);
-      ctx.lineWidth = wallThickness;
-      ctx.strokeStyle = 'gray';
-      ctx.setLineDash([5, 5]); // Dashed line for shadow
+      ctx.lineTo(endX, endY);
+      ctx.lineWidth = wallThickness / zoomLevel;
+      ctx.strokeStyle = '#87CEEB'; // Light blue
       ctx.stroke();
-      ctx.setLineDash([]); // Reset line dash
       const tempLength = Math.sqrt(
-        Math.pow(mousePos.x - tempWallStart.x, 2) + Math.pow(mousePos.y - tempWallStart.y, 2)
+        Math.pow(endX - tempWallStart.x, 2) + Math.pow(endY - tempWallStart.y, 2)
       );
-      const tempLengthFeet = (tempLength / scale * metersToFeet).toFixed(1);
-      const tempMidX = (tempWallStart.x + mousePos.x) / 2;
-      const tempMidY = (tempWallStart.y + mousePos.y) / 2;
-      ctx.fillText(`${tempLengthFeet}'`, tempMidX, tempMidY - 10);
+      const tempLengthFeet = (tempLength / scale).toFixed(1);
+      const tempMidX = (tempWallStart.x + endX) / 2;
+      const tempMidY = (tempWallStart.y + endY) / 2;
+      ctx.fillText(`${tempLengthFeet}'`, tempMidX, tempMidY - 10 / zoomLevel);
     }
-  }, [walls, colorScheme, selectedWallId, tempWallStart, mousePos]);
+
+    ctx.restore();
+  }, [walls, floorColor, selectedWallId, tempWallStart, mousePos, zoomLevel, panOffset]);
 
   // Update mouse position
   const handleMouseMove = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
-    setMousePos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    setMousePos({ x, y });
+
+    // Handle panning
+    if (isPanning) {
+      const dx = (x - lastMousePos.x) / zoomLevel;
+      const dy = (y - lastMousePos.y) / zoomLevel;
+      setPanOffset((prev) => ({
+        x: prev.x + dx,
+        y: prev.y + dy,
+      }));
+      setLastMousePos({ x, y });
+    }
   };
 
-  // Handle arrow movement for furniture
+  // Handle arrow movement for furniture with wall boundary constraints
   const handleMoveFurniture = (direction) => {
     if (mode !== 'furniture' || !selectedFurniture) return;
 
@@ -128,8 +196,12 @@ export default function Design2DPage() {
         return;
     }
 
-    newX = Math.max(0, Math.min(newX, roomWidth * scale - selectedFurniture.width * scale));
-    newY = Math.max(0, Math.min(newY, roomLength * scale - selectedFurniture.length * scale));
+    const bounds = getWallBounds();
+    const furnitureWidthPx = selectedFurniture.width * scale;
+    const furnitureHeightPx = selectedFurniture.length * scale;
+
+    newX = Math.max(bounds.minX, Math.min(newX, bounds.maxX - furnitureWidthPx));
+    newY = Math.max(bounds.minY, Math.min(newY, bounds.maxY - furnitureHeightPx));
 
     setFurniture((prev) =>
       prev.map((item) =>
@@ -138,16 +210,60 @@ export default function Design2DPage() {
     );
   };
 
-  // Handle adding walls
-  const handleCanvasClick = (e) => {
+  // Handle mouse down for panning
+  const handleMouseDown = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+
+    // Start panning if not in specific modes
+    if (mode === 'furniture' && !selectedFurnitureId && !walls.some(wall => 
+      x >= Math.min(wall.start.x, wall.end.x) * zoomLevel + panOffset.x * zoomLevel &&
+      x <= (Math.max(wall.start.x, wall.end.x) * zoomLevel + panOffset.x * zoomLevel) &&
+      y >= Math.min(wall.start.y, wall.end.y) * zoomLevel + panOffset.y * zoomLevel &&
+      y <= (Math.max(wall.start.y, wall.end.y) * zoomLevel + panOffset.y * zoomLevel)
+    )) {
+      setIsPanning(true);
+      setLastMousePos({ x, y });
+    }
+  };
+
+  // Handle mouse up to stop panning
+  const handleMouseUp = () => {
+    setIsPanning(false);
+  };
+
+  // Handle adding walls
+  const handleCanvasClick = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    let x = (e.clientX - rect.left) / zoomLevel - panOffset.x; // Adjust for zoom and pan
+    let y = (e.clientY - rect.top) / zoomLevel - panOffset.y;
 
     if (mode === 'add-walls') {
       if (!tempWallStart) {
         setTempWallStart({ x, y });
       } else {
+        // Snap to 90 degrees for the final wall
+        const dx = x - tempWallStart.x;
+        const dy = y - tempWallStart.y;
+        const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+        const length = Math.sqrt(dx * dx + dy * dy);
+        let snappedAngle = angle;
+
+        if (Math.abs(angle) < 15 || Math.abs(angle) > 165) {
+          snappedAngle = dx >= 0 ? 0 : 180; // Horizontal: right (0°) or left (180°)
+        } else if (Math.abs(angle - 90) < 15) {
+          snappedAngle = 90; // Vertical: down (90°)
+        } else if (Math.abs(angle + 90) < 15) {
+          snappedAngle = -90; // Vertical: up (-90°)
+        }
+
+        if (snappedAngle !== angle) {
+          const snappedAngleRad = snappedAngle * (Math.PI / 180);
+          x = tempWallStart.x + length * Math.cos(snappedAngleRad);
+          y = tempWallStart.y + length * Math.sin(snappedAngleRad);
+        }
+
         const newWall = {
           id: Date.now() + Math.random(),
           start: { x: tempWallStart.x, y: tempWallStart.y },
@@ -180,13 +296,13 @@ export default function Design2DPage() {
     if (mode !== 'move-walls' || !draggingWall) return;
 
     const rect = canvasRef.current.getBoundingClientRect();
-    const deltaX = e.clientX - rect.left - (draggingWall.start.x + draggingWall.end.x) / 2;
-    const deltaY = e.clientY - rect.top - (draggingWall.start.y + draggingWall.end.y) / 2;
+    const deltaX = ((e.clientX - rect.left) / zoomLevel - panOffset.x) - (draggingWall.start.x + draggingWall.end.x) / 2;
+    const deltaY = ((e.clientY - rect.top) / zoomLevel - panOffset.y) - (draggingWall.start.y + draggingWall.end.y) / 2;
 
-    const newStartX = Math.max(0, Math.min(draggingWall.start.x + deltaX, 800));
-    const newStartY = Math.max(0, Math.min(draggingWall.start.y + deltaY, 400));
-    const newEndX = Math.max(0, Math.min(draggingWall.end.x + deltaX, 800));
-    const newEndY = Math.max(0, Math.min(draggingWall.end.y + deltaY, 400));
+    const newStartX = Math.max(0, Math.min(draggingWall.start.x + deltaX, canvasWidth / zoomLevel));
+    const newStartY = Math.max(0, Math.min(draggingWall.start.y + deltaY, canvasHeight / zoomLevel));
+    const newEndX = Math.max(0, Math.min(draggingWall.end.x + deltaX, canvasWidth / zoomLevel));
+    const newEndY = Math.max(0, Math.min(draggingWall.end.y + deltaY, canvasHeight / zoomLevel));
 
     setWalls((prev) =>
       prev.map((w) => {
@@ -210,12 +326,20 @@ export default function Design2DPage() {
   };
 
   const handleAddFurniture = (type) => {
+    const dimensions = {
+      Chair: { width: 3.3, length: 3.3 }, // 1m = 3.3ft
+      Table: { width: 6.6, length: 4.9 }, // 2m x 1.5m = 6.6ft x 4.9ft
+      Sofa: { width: 6.6, length: 3.3 }, // 2m x 1m = 6.6ft x 3.3ft
+      Bed: { width: 6.6, length: 4.9 }, // 2m x 1.5m = 6.6ft x 4.9ft
+      Lamp: { width: 1.6, length: 1.6 }, // 0.5m = 1.6ft
+    };
+    const { width, length } = dimensions[type];
     const newFurniture = {
       type,
-      x: 50,
-      y: 50,
-      width: type === 'Chair' ? 1 : 2,
-      length: type === 'Chair' ? 1 : 1.5,
+      x: canvasWidth / 2 / zoomLevel - panOffset.x - width * scale / 2, // Center of canvas, adjusted for zoom and pan
+      y: canvasHeight / 2 / zoomLevel - panOffset.y - length * scale / 2,
+      width,
+      length,
       color: '#8b4513',
       id: Date.now() + Math.random(),
     };
@@ -245,7 +369,7 @@ export default function Design2DPage() {
   };
 
   const handleSave = () => {
-    alert('Design saved: ' + JSON.stringify({ roomWidth, roomLength, colorScheme, furniture, walls }));
+    alert('Design saved: ' + JSON.stringify({ roomWidth, roomLength, floorColor, furniture, walls }));
   };
 
   const handleDeleteFurniture = () => {
@@ -253,6 +377,15 @@ export default function Design2DPage() {
       setFurniture(furniture.filter((item) => item.id !== selectedFurnitureId));
       setSelectedFurnitureId(null);
     }
+  };
+
+  // Zoom handlers
+  const handleZoomIn = () => {
+    setZoomLevel((prev) => Math.min(prev + 0.1, 2)); // Max zoom 2x
+  };
+
+  const handleZoomOut = () => {
+    setZoomLevel((prev) => Math.max(prev - 0.1, 0.5)); // Min zoom 0.5x
   };
 
   return (
@@ -272,175 +405,203 @@ export default function Design2DPage() {
             <div className="space-y-4">
               <div>
                 <label htmlFor="roomWidth" className="block text-sm font-medium text-gray-700">
-                  Room Width (m)
+                  Room Width (ft)
                 </label>
                 <Input
                   type="number"
                   id="roomWidth"
                   value={roomWidth}
                   onChange={(e) => setRoomWidth(e.target.value)}
-                  placeholder="e.g., 5"
+                  placeholder="e.g., 16.4"
                   min="1"
                 />
-                <p className="text-sm text-gray-500">({roomWidthFeet} ft)</p>
               </div>
               <div>
                 <label htmlFor="roomLength" className="block text-sm font-medium text-gray-700">
-                  Room Length (m)
+                  Room Length (ft)
                 </label>
                 <Input
                   type="number"
                   id="roomLength"
                   value={roomLength}
                   onChange={(e) => setRoomLength(e.target.value)}
-                  placeholder="e.g., 7"
+                  placeholder="e.g., 23.0"
                   min="1"
                 />
-                <p className="text-sm text-gray-500">({roomLengthFeet} ft)</p>
               </div>
               <div>
-                <label htmlFor="colorScheme" className="block text-sm font-medium text-gray-700">
-                  Color Scheme
+                <label htmlFor="floorColor" className="block text-sm font-medium text-gray-700">
+                  Floor Color
                 </label>
-                <Select value={colorScheme} onValueChange={setColorScheme}>
+                <Select value={floorColor} onValueChange={setFloorColor}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Select color scheme" />
+                    <SelectValue placeholder="Select floor color" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Neutral">Neutral</SelectItem>
-                    <SelectItem value="Warm">Warm</SelectItem>
-                    <SelectItem value="Cool">Cool</SelectItem>
+                    <SelectItem value="#d1d5db">Neutral</SelectItem>
+                    <SelectItem value="#f97316">Warm</SelectItem>
+                    <SelectItem value="#3b82f6">Cool</SelectItem>
+                    <SelectItem value="#22c55e">Green</SelectItem>
+                    <SelectItem value="#1e40af">Blue</SelectItem>
+                    <SelectItem value="#f5f5dc">Beige</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <h3 className="text-sm font-medium text-gray-700">Wall Controls</h3>
-                <div className="flex space-x-2">
-                  <Button
-                    onClick={() => setMode('add-walls')}
-                    variant={mode === 'add-walls' ? 'default' : 'outline'}
-                  >
-                    Add Walls
-                  </Button>
-                  <Button
-                    onClick={() => setMode('move-walls')}
-                    variant={mode === 'move-walls' ? 'default' : 'outline'}
-                  >
-                    Move Walls
-                  </Button>
-                  <Button
-                    onClick={() => setMode('delete-walls')}
-                    variant={mode === 'delete-walls' ? 'default' : 'outline'}
-                  >
-                    Delete Walls
-                  </Button>
-                  <Button
-                    onClick={() => setMode('furniture')}
-                    variant={mode === 'furniture' ? 'default' : 'outline'}
-                  >
-                    Furniture Mode
-                  </Button>
-                </div>
-                {mode === 'delete-walls' && (
-                  <Button
-                    onClick={() => setMode('furniture')}
-                    className="w-full mt-2"
-                    variant="secondary"
-                  >
-                    Exit Delete Mode
-                  </Button>
-                )}
-              </div>
-              <div>
-                <h3 className="text-sm font-medium text-gray-700">Add Furniture</h3>
-                <div className="flex space-x-2">
-                  <Button onClick={() => handleAddFurniture('Chair')}>Add Chair</Button>
-                  <Button onClick={() => handleAddFurniture('Table')}>Add Table</Button>
-                </div>
-              </div>
-              {selectedFurniture && mode === 'furniture' && (
-                <div>
-                  <h3 className="text-sm font-medium text-gray-700">Customize Furniture</h3>
-                  <div className="space-y-2">
-                    <div>
-                      <label htmlFor="furnitureColor" className="block text-sm font-medium text-gray-700">
-                        Color
-                      </label>
-                      <Select
-                        onValueChange={handleColorChange}
-                        defaultValue={selectedFurniture.color}
+              <Tabs defaultValue="walls" className="space-y-4">
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="walls">Walls</TabsTrigger>
+                  <TabsTrigger value="furniture">Furniture</TabsTrigger>
+                </TabsList>
+                <TabsContent value="walls">
+                  <div className="space-y-4">
+                    <h3 className="text-sm font-medium text-gray-700">Wall Controls</h3>
+                    <div className="flex space-x-2 flex-col">
+                      <Button
+                        onClick={() => setMode('add-walls')}
+                        variant={mode === 'add-walls' ? 'default' : 'outline'}
                       >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select color" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="#8b4513">Brown</SelectItem>
-                          <SelectItem value="#000000">Black</SelectItem>
-                          <SelectItem value="#ffffff">White</SelectItem>
-                        </SelectContent>
-                      </Select>
+                        Add Walls
+                      </Button>
+                      <Button
+                        onClick={() => setMode('move-walls')}
+                        variant={mode === 'move-walls' ? 'default' : 'outline'}
+                      >
+                        Move Walls
+                      </Button>
+                      <Button
+                        onClick={() => setMode('delete-walls')}
+                        variant={mode === 'delete-walls' ? 'default' : 'outline'}
+                      >
+                        Delete Walls
+                      </Button>
+                      <Button
+                        onClick={() => setMode('furniture')}
+                        variant={mode === 'furniture' ? 'default' : 'outline'}
+                      >
+                        Furniture Mode
+                      </Button>
                     </div>
-                    <div>
-                      <label htmlFor="furnitureWidth" className="block text-sm font-medium text-gray-700">
-                        Width (m)
-                      </label>
-                      <Input
-                        type="number"
-                        id="furnitureWidth"
-                        defaultValue={selectedFurniture.width}
-                        onChange={(e) => handleScaleChange(e.target.value, selectedFurniture.length)}
-                        min="0.5"
-                        step="0.1"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="furnitureLength" className="block text-sm font-medium text-gray-700">
-                        Length (m)
-                      </label>
-                      <Input
-                        type="number"
-                        id="furnitureLength"
-                        defaultValue={selectedFurniture.length}
-                        onChange={(e) => handleScaleChange(selectedFurniture.width, e.target.value)}
-                        min="0.5"
-                        step="0.1"
-                      />
-                    </div>
+                    {mode === 'delete-walls' && (
+                      <Button
+                        onClick={() => setMode('furniture')}
+                        className="w-full mt-2"
+                        variant="secondary"
+                      >
+                        Exit Delete Mode
+                      </Button>
+                    )}
                   </div>
-                </div>
-              )}
+                </TabsContent>
+                <TabsContent value="furniture">
+                  <div className="space-y-4">
+                    <h3 className="text-sm font-medium text-gray-700">Add Furniture</h3>
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={() => handleAddFurniture('Chair')}>Chair</Button>
+                      <Button onClick={() => handleAddFurniture('Table')}>Table</Button>
+                      <Button onClick={() => handleAddFurniture('Sofa')}>Sofa</Button>
+                      <Button onClick={() => handleAddFurniture('Bed')}>Bed</Button>
+                      <Button onClick={() => handleAddFurniture('Lamp')}>Lamp</Button>
+                    </div>
+                    {selectedFurniture && mode === 'furniture' && (
+                      <div>
+                        <h3 className="text-sm font-medium text-gray-700">Customize Furniture</h3>
+                        <div className="space-y-2">
+                          <div>
+                            <label htmlFor="furnitureColor" className="block text-sm font-medium text-gray-700">
+                              Color
+                            </label>
+                            <Select
+                              onValueChange={handleColorChange}
+                              defaultValue={selectedFurniture.color}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Select color" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="#8b4513">Brown</SelectItem>
+                                <SelectItem value="#000000">Black</SelectItem>
+                                <SelectItem value="#ffffff">White</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div>
+                            <label htmlFor="furnitureWidth" className="block text-sm font-medium text-gray-700">
+                              Width (ft)
+                            </label>
+                            <Input
+                              type="number"
+                              id="furnitureWidth"
+                              defaultValue={selectedFurniture.width}
+                              onChange={(e) => handleScaleChange(e.target.value, selectedFurniture.length)}
+                              min="0.5"
+                              step="0.1"
+                            />
+                          </div>
+                          <div>
+                            <label htmlFor="furnitureLength" className="block text-sm font-medium text-gray-700">
+                              Length (ft)
+                            </label>
+                            <Input
+                              type="number"
+                              id="furnitureLength"
+                              defaultValue={selectedFurniture.length}
+                              onChange={(e) => handleScaleChange(selectedFurniture.width, e.target.value)}
+                              min="0.5"
+                              step="0.1"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {mode === 'furniture' && (
+                      <Button
+                        onClick={handleDeleteFurniture}
+                        className="w-full mt-2"
+                        variant="destructive"
+                        disabled={!selectedFurniture}
+                      >
+                        Delete Selected Furniture
+                      </Button>
+                    )}
+                  </div>
+                </TabsContent>
+              </Tabs>
               <div className="space-y-2">
                 <Button onClick={handleSave} className="w-full">
                   Save Design
                 </Button>
-                {mode === 'furniture' && (
-                  <Button
-                    onClick={handleDeleteFurniture}
-                    className="w-full"
-                    variant="destructive"
-                    disabled={!selectedFurniture}
-                  >
-                    Delete Selected Furniture
-                  </Button>
-                )}
               </div>
             </div>
           </div>
           <div className="md:col-span-2 bg-white p-4 rounded-lg shadow">
-            <h2 className="text-lg font-semibold mb-4">2D Design Canvas</h2>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-semibold">2D Design Canvas</h2>
+              <div className="flex space-x-2">
+                <Button onClick={handleZoomIn} variant="outline">
+                  Zoom In
+                </Button>
+                <Button onClick={handleZoomOut} variant="outline">
+                  Zoom Out
+                </Button>
+              </div>
+            </div>
             <div
               className="relative border rounded-md"
-              style={{ width: '800px', height: '400px', overflow: 'hidden' }}
-              onClick={(e) => {
-                if (mode === 'furniture') setSelectedFurnitureId(null);
-                if (mode === 'delete-walls' || mode === 'move-walls') setSelectedWallId(null);
-                handleCanvasClick(e);
-              }}
+              style={{ width: '770px', height: '400px', overflow: 'hidden' }}
+              onMouseDown={handleMouseDown}
               onMouseMove={(e) => {
                 handleMouseMove(e);
                 handleMouseMoveWall(e);
               }}
-              onMouseUp={handleMouseUpWall}
+              onMouseUp={(e) => {
+                handleMouseUp();
+                handleMouseUpWall();
+              }}
+              onClick={(e) => {
+                if (mode === 'furniture') setSelectedFurnitureId(null);
+                if (mode === 'delete-walls' || mode === 'move-walls') setSelectedWallId(null);
+                if (!isPanning) handleCanvasClick(e);
+              }}
             >
               <canvas
                 ref={canvasRef}
@@ -452,8 +613,8 @@ export default function Design2DPage() {
                 <div
                   key={item.id}
                   style={{
-                    width: item.width * scale,
-                    height: item.length * scale,
+                    width: item.width * scale * zoomLevel,
+                    height: item.length * scale * zoomLevel,
                     backgroundColor: item.color,
                     border: item.id === selectedFurnitureId ? '2px solid red' : '1px solid black',
                     position: 'absolute',
@@ -462,9 +623,9 @@ export default function Design2DPage() {
                     alignItems: 'center',
                     justifyContent: 'center',
                     color: '#000',
-                    fontSize: '12px',
-                    left: item.x,
-                    top: item.y,
+                    fontSize: `${12 / zoomLevel}px`,
+                    left: (item.x + panOffset.x) * zoomLevel,
+                    top: (item.y + panOffset.y) * zoomLevel,
                   }}
                   onClick={(e) => {
                     if (mode !== 'furniture') return;
@@ -536,10 +697,10 @@ export default function Design2DPage() {
                   key={wall.id}
                   style={{
                     position: 'absolute',
-                    left: Math.min(wall.start.x, wall.end.x),
-                    top: Math.min(wall.start.y, wall.end.y),
-                    width: Math.abs(wall.end.x - wall.start.x) || wallThickness,
-                    height: Math.abs(wall.end.y - wall.start.y) || wallThickness,
+                    left: (Math.min(wall.start.x, wall.end.x) + panOffset.x) * zoomLevel,
+                    top: (Math.min(wall.start.y, wall.end.y) + panOffset.y) * zoomLevel,
+                    width: (Math.abs(wall.end.x - wall.start.x) || wallThickness) * zoomLevel,
+                    height: (Math.abs(wall.end.y - wall.start.y) || wallThickness) * zoomLevel,
                     cursor: mode === 'move-walls' || mode === 'delete-walls' ? 'pointer' : 'default',
                   }}
                   onMouseDown={(e) => handleMouseDownWall(wall, e)}
