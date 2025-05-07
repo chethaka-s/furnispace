@@ -10,11 +10,14 @@ export default function Design2DPage() {
   const [roomLength, setRoomLength] = useState(7);
   const [colorScheme, setColorScheme] = useState('Neutral');
   const [furniture, setFurniture] = useState([]);
-  const [selectedFurniture, setSelectedFurniture] = useState(null);
+  const [selectedFurnitureId, setSelectedFurnitureId] = useState(null);
   const canvasRef = useRef(null);
   const router = useRouter();
   const scale = 30;
   const stepSize = 0.5; // Meters (15px at scale=30)
+
+  // Get selected furniture based on id
+  const selectedFurniture = furniture.find((item) => item.id === selectedFurnitureId);
 
   // Draw room canvas
   useEffect(() => {
@@ -54,9 +57,10 @@ export default function Design2DPage() {
     newX = Math.max(0, Math.min(newX, roomWidth * scale - selectedFurniture.width * scale));
     newY = Math.max(0, Math.min(newY, roomLength * scale - selectedFurniture.length * scale));
 
-    setFurniture(
-      furniture.map((item) =>
-        item === selectedFurniture ? { ...item, x: newX, y: newY } : item
+    // Update furniture state
+    setFurniture((prev) =>
+      prev.map((item) =>
+        item.id === selectedFurnitureId ? { ...item, x: newX, y: newY } : item
       )
     );
   };
@@ -69,15 +73,16 @@ export default function Design2DPage() {
       width: type === 'Chair' ? 1 : 2,
       length: type === 'Chair' ? 1 : 1.5,
       color: '#8b4513',
+      id: Date.now() + Math.random(), // Unique id
     };
     setFurniture([...furniture, newFurniture]);
   };
 
   const handleColorChange = (color) => {
     if (selectedFurniture) {
-      setFurniture(
-        furniture.map((item) =>
-          item === selectedFurniture ? { ...item, color } : item
+      setFurniture((prev) =>
+        prev.map((item) =>
+          item.id === selectedFurnitureId ? { ...item, color } : item
         )
       );
     }
@@ -85,9 +90,11 @@ export default function Design2DPage() {
 
   const handleScaleChange = (width, length) => {
     if (selectedFurniture) {
-      setFurniture(
-        furniture.map((item) =>
-          item === selectedFurniture ? { ...item, width: parseFloat(width), length: parseFloat(length) } : item
+      setFurniture((prev) =>
+        prev.map((item) =>
+          item.id === selectedFurnitureId
+            ? { ...item, width: parseFloat(width), length: parseFloat(length) }
+            : item
         )
       );
     }
@@ -99,8 +106,8 @@ export default function Design2DPage() {
 
   const handleDelete = () => {
     if (selectedFurniture) {
-      setFurniture(furniture.filter((item) => item !== selectedFurniture));
-      setSelectedFurniture(null);
+      setFurniture(furniture.filter((item) => item.id !== selectedFurnitureId));
+      setSelectedFurnitureId(null);
     }
   };
 
@@ -108,7 +115,7 @@ export default function Design2DPage() {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow">
         <div className="max-w-7xl mx-auto py-4 px-4 sm:px-6 lg:px-8 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-gray-900">Furniture Design Studio (2D)</h1>
+          <h1 className="text-2xl font-bold text-gray-900">FurniSpace</h1>
           <Button onClick={() => router.push('/design')} variant="outline">
             Switch to 3D
           </Button>
@@ -233,7 +240,7 @@ export default function Design2DPage() {
             <div
               className="relative w-[500px] h-[300px] border rounded-md"
               style={{ position: 'relative', overflow: 'hidden' }}
-              onClick={() => setSelectedFurniture(null)}
+              onClick={() => setSelectedFurnitureId(null)}
             >
               <canvas
                 ref={canvasRef}
@@ -241,14 +248,14 @@ export default function Design2DPage() {
                 height={300}
                 className="absolute top-0 left-0"
               />
-              {furniture.map((item, index) => (
+              {furniture.map((item) => (
                 <div
-                  key={index}
+                  key={item.id}
                   style={{
                     width: item.width * scale,
                     height: item.length * scale,
                     backgroundColor: item.color,
-                    border: item === selectedFurniture ? '2px solid red' : '1px solid black',
+                    border: item.id === selectedFurnitureId ? '2px solid red' : '1px solid black',
                     position: 'absolute',
                     cursor: 'pointer',
                     display: 'flex',
@@ -261,11 +268,11 @@ export default function Design2DPage() {
                   }}
                   onClick={(e) => {
                     e.stopPropagation();
-                    setSelectedFurniture(item);
+                    setSelectedFurnitureId(item.id);
                   }}
                 >
                   {item.type}
-                  {item === selectedFurniture && (
+                  {item.id === selectedFurnitureId && (
                     <div>
                       {/* Up Arrow */}
                       <button
