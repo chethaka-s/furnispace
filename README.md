@@ -68,6 +68,7 @@ Before you begin, ensure you have the following installed:
    
 
 3. **Environment Setup**
+   --.env file has already being pushed with the files if doesnt work please follow below steps--
    - Create a `.env` file in the root directory
    - Add the following environment variables:
    
