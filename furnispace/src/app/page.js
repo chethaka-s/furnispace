@@ -49,6 +49,13 @@ export default function Home() {
               >
                 Log In
               </Button>
+              <Button 
+                variant="ghost" 
+                onClick={() => router.push('/signup')}
+                className="text-white hover:text-gray-300"
+              >
+                Sign Up
+              </Button>
             </motion.div>
           </div>
         </div>
